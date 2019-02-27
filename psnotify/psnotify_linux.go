@@ -144,6 +144,10 @@ func (w *Watcher) isWatching(pid int, event uint32) bool {
 	if watch, ok := w.watches[pid]; ok {
 		return (watch.flags & event) == event
 	}
+	//for any process
+	if watch, ok := w.watches[-1]; ok {
+		return (watch.flags & event) == event
+	}
 	return false
 }
 

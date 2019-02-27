@@ -40,6 +40,10 @@ Example:
     watcher.Close()
 ```
 
+## New Feature
+
+2019-02-27 CHENQ: linux Watch(-1, XXX) to recive any process
+
 ## Supported platforms
 
 Currently targeting modern flavors of Darwin and Linux.
