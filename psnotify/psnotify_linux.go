@@ -8,7 +8,7 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/elastic/gosigar/sys"
+	"github.com/chennqqi/gosigar/sys"
 )
 
 const (

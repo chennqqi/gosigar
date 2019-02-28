@@ -5,7 +5,7 @@ package linux
 import (
 	"errors"
 
-	"github.com/elastic/gosigar/sys"
+	"github.com/chennqqi/gosigar/sys"
 )
 
 // Netlink Error Code Handling

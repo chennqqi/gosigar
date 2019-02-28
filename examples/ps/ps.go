@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/elastic/gosigar"
+	"github.com/chennqqi/gosigar"
 )
 
 func main() {
