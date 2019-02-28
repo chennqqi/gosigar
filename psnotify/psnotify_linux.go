@@ -24,20 +24,19 @@ const (
 	PROC_EVENT_FORK = 0x00000001 // fork() events
 	PROC_EVENT_EXEC = 0x00000002 // exec() events
 	PROC_EVENT_EXIT = 0x80000000 // exit() events
-	
-		PROC_EVENT_UID  = 0x00000004
-		PROC_EVENT_GID  = 0x00000040
-		PROC_EVENT_SID  = 0x00000080
-		PROC_EVENT_PTRACE = 0x00000100
-		PROC_EVENT_COMM = 0x00000200
-		/* "next" should be 0x00000400 */
-		/* "last" is the last process event: exit,
-		 * while "next to last" is coredumping event */
-		PROC_EVENT_COREDUMP = 0x40000000,
-	
+
+	PROC_EVENT_UID    = 0x00000004
+	PROC_EVENT_GID    = 0x00000040
+	PROC_EVENT_SID    = 0x00000080
+	PROC_EVENT_PTRACE = 0x00000100
+	PROC_EVENT_COMM   = 0x00000200
+	/* "next" should be 0x00000400 */
+	/* "last" is the last process event: exit,
+	 * while "next to last" is coredumping event */
+	PROC_EVENT_COREDUMP = 0x40000000
 
 	// Watch for all process events
-	PROC_EVENT_ALL = PROC_EVENT_FORK|PROC_EVENT_EXEC|PROC_EVENT_EXIT|PROC_EVENT_GID|PROC_EVENT_SID|PROC_EVENT_UID
+	PROC_EVENT_ALL = PROC_EVENT_FORK | PROC_EVENT_EXEC | PROC_EVENT_EXIT | PROC_EVENT_GID | PROC_EVENT_SID | PROC_EVENT_UID
 )
 
 var (
@@ -94,8 +93,8 @@ struct id_proc_event {
 			__kernel_pid_t process_pid;
 			__kernel_pid_t process_tgid;
 			union {
-				__u32 ruid; //task uid 
-				__u32 rgid; //task gid 
+				__u32 ruid; //task uid
+				__u32 rgid; //task gid
 			} r;
 			union {
 				__u32 euid;
@@ -106,8 +105,8 @@ struct id_proc_event {
 type idProcEvent struct {
 	ProcessPid  uint32
 	ProcessTgid uint32
-	Rid uint32  //rid or rgid
-	eId uint32 //egit or euid
+	Rid         uint32 //rid or rgid
+	Eid         uint32 //egit or euid
 }
 
 // linux/cn_proc.h: struct proc_event.sid
@@ -249,22 +248,22 @@ func (w *Watcher) handleEvent(data []byte) {
 			w.RemoveWatch(pid)
 			w.Exit <- &ProcEventExit{Pid: pid}
 		}
-	case PROC_EVENT_UID,PROC_EVENT_GID:
+	case PROC_EVENT_UID, PROC_EVENT_GID:
 		event := &idProcEvent{}
-		binary.Read(buf, byteOrder, event)	
+		binary.Read(buf, byteOrder, event)
 		pid := int(event.ProcessPid)
 		if w.isWatching(pid, PROC_EVENT_UID) {
 			w.RemoveWatch(pid)
-			w.Uid <- &ProcEventExit{Pid: pid}
-		}		
+			w.Uid <- &ProcEventUid{Pid: pid, Tgid: event.ProcessTgid, Rid: event.Rid, Eid: event.Eid}
+		}
 	case PROC_EVENT_SID:
 		event := &sidProcEvent{}
-		binary.Read(buf, byteOrder, event)	
+		binary.Read(buf, byteOrder, event)
 		pid := int(event.ProcessPid)
 		if w.isWatching(pid, PROC_EVENT_SID) {
 			w.RemoveWatch(pid)
-			w.Sid <- &ProcEventExit{Pid: pid}
-		}				
+			w.Sid <- &ProcEventSid{Pid: pid, Tgid: event.ProcessTgid}
+		}
 	}
 }
 
