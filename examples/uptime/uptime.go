@@ -1,17 +1,18 @@
+// Copyright (c) 2012 VMware, Inc.
+
 package main
 
 import (
 	"fmt"
 	"os"
 	"time"
-
-	"github.com/cloudfoundry/gosigar"
+	"github.com/chennqqi/gosigar"
 )
 
 func main() {
-	concreteSigar := sigar.ConcreteSigar{}
+	concreteSigar := gosigar.ConcreteSigar{}
 
-	uptime := sigar.Uptime{}
+	uptime := gosigar.Uptime{}
 	uptime.Get()
 	avg, err := concreteSigar.GetLoadAverage()
 	if err != nil {

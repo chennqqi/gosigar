@@ -1,5 +1,7 @@
 // +build darwin freebsd linux netbsd openbsd
 
+// +build darwin freebsd netbsd openbsd linux
+
 package psnotify
 
 import (

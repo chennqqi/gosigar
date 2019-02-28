@@ -1,10 +1,12 @@
+// Copyright (c) 2012 VMware, Inc.
+
 package main
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/cloudfoundry/gosigar"
+	"github.com/chennqqi/gosigar"
 )
 
 func format(val uint64) uint64 {
@@ -12,8 +14,8 @@ func format(val uint64) uint64 {
 }
 
 func main() {
-	mem := sigar.Mem{}
-	swap := sigar.Swap{}
+	mem := gosigar.Mem{}
+	swap := gosigar.Swap{}
 
 	mem.Get()
 	swap.Get()

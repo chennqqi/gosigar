@@ -1,18 +1,35 @@
-package sigar
+package gosigar
 
 import (
-	"errors"
 	"time"
 )
 
-var ErrNotImplemented = errors.New("gosigar: not implemented")
+type ErrNotImplemented struct {
+	OS string
+}
+
+func (e ErrNotImplemented) Error() string {
+	return "not implemented on " + e.OS
+}
+
+func IsNotImplemented(err error) bool {
+	switch err.(type) {
+	case ErrNotImplemented, *ErrNotImplemented:
+		return true
+	default:
+		return false
+	}
+}
 
 type Sigar interface {
 	CollectCpuStats(collectionInterval time.Duration) (<-chan Cpu, chan<- struct{})
 	GetLoadAverage() (LoadAverage, error)
 	GetMem() (Mem, error)
 	GetSwap() (Swap, error)
+	GetHugeTLBPages(HugeTLBPages, error)
 	GetFileSystemUsage(string) (FileSystemUsage, error)
+	GetFDUsage() (FDUsage, error)
+	GetRusage(who int) (Rusage, error)
 }
 
 type Cpu struct {
@@ -66,8 +83,23 @@ type Swap struct {
 	Free  uint64
 }
 
+type HugeTLBPages struct {
+	Total              uint64
+	Free               uint64
+	Reserved           uint64
+	Surplus            uint64
+	DefaultSize        uint64
+	TotalAllocatedSize uint64
+}
+
 type CpuList struct {
 	List []Cpu
+}
+
+type FDUsage struct {
+	Open   uint64
+	Unused uint64
+	Max    uint64
 }
 
 type FileSystem struct {
@@ -109,8 +141,10 @@ const (
 
 type ProcState struct {
 	Name      string
+	Username  string
 	State     RunState
 	Ppid      int
+	Pgid      int
 	Tty       int
 	Priority  int
 	Nice      int
@@ -133,19 +167,41 @@ type ProcTime struct {
 	Total     uint64
 }
 
-type ProcCpu struct {
-	ProcTime
-	LastTime uint64
-	Percent  float64
-	cache    map[int]ProcCpu
-}
-
 type ProcArgs struct {
 	List []string
+}
+
+type ProcEnv struct {
+	Vars map[string]string
 }
 
 type ProcExe struct {
 	Name string
 	Cwd  string
 	Root string
+}
+
+type ProcFDUsage struct {
+	Open      uint64
+	SoftLimit uint64
+	HardLimit uint64
+}
+
+type Rusage struct {
+	Utime    time.Duration
+	Stime    time.Duration
+	Maxrss   int64
+	Ixrss    int64
+	Idrss    int64
+	Isrss    int64
+	Minflt   int64
+	Majflt   int64
+	Nswap    int64
+	Inblock  int64
+	Oublock  int64
+	Msgsnd   int64
+	Msgrcv   int64
+	Nsignals int64
+	Nvcsw    int64
+	Nivcsw   int64
 }

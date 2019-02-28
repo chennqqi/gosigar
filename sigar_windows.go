@@ -1,143 +1,318 @@
-package sigar
+// Copyright (c) 2012 VMware, Inc.
+
+package gosigar
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
-	"strconv"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
-	"unsafe"
 
-	"github.com/cloudfoundry/gosigar/sys/windows"
+	"github.com/StackExchange/wmi"
+	"github.com/elastic/gosigar/sys/windows"
 	"github.com/pkg/errors"
 )
 
-var (
-	kernel32DLL = syscall.MustLoadDLL("kernel32")
+// Win32_Process represents a process on the Windows operating system. If
+// additional fields are added here (that match the Windows struct) they will
+// automatically be populated when calling getWin32Process.
+// https://msdn.microsoft.com/en-us/library/windows/desktop/aa394372(v=vs.85).aspx
+type Win32_Process struct {
+	CommandLine *string
+}
 
-	procGetDiskFreeSpace     = kernel32DLL.MustFindProc("GetDiskFreeSpaceW")
-	procGetSystemTimes       = kernel32DLL.MustFindProc("GetSystemTimes")
-	procGetTickCount64       = kernel32DLL.MustFindProc("GetTickCount64")
-	procGlobalMemoryStatusEx = kernel32DLL.MustFindProc("GlobalMemoryStatusEx")
+// Win32_OperatingSystem WMI class represents a Windows-based operating system
+// installed on a computer.
+// https://msdn.microsoft.com/en-us/library/windows/desktop/aa394239(v=vs.85).aspx
+type Win32_OperatingSystem struct {
+	LastBootUpTime time.Time
+}
+
+var (
+	// version is Windows version of the host OS.
+	version = windows.GetWindowsVersion()
 
 	// processQueryLimitedInfoAccess is set to PROCESS_QUERY_INFORMATION for Windows
 	// 2003 and XP where PROCESS_QUERY_LIMITED_INFORMATION is unknown. For all newer
 	// OS versions it is set to PROCESS_QUERY_LIMITED_INFORMATION.
 	processQueryLimitedInfoAccess = windows.PROCESS_QUERY_LIMITED_INFORMATION
+
+	// bootTime is the time when the OS was last booted. This value may be nil
+	// on operating systems that do not support the WMI query used to obtain it.
+	bootTime     *time.Time
+	bootTimeLock sync.Mutex
 )
 
+func init() {
+	if !version.IsWindowsVistaOrGreater() {
+		// PROCESS_QUERY_LIMITED_INFORMATION cannot be used on 2003 or XP.
+		processQueryLimitedInfoAccess = syscall.PROCESS_QUERY_INFORMATION
+	}
+}
+
 func (self *LoadAverage) Get() error {
-	return ErrNotImplemented
+	return ErrNotImplemented{runtime.GOOS}
 }
 
-func (u *Uptime) Get() error {
-	r1, _, e1 := syscall.Syscall(procGetTickCount64.Addr(), 0, 0, 0, 0)
-	if e1 != 0 {
-		return error(e1)
-	}
-	u.Length = (time.Duration(r1) * time.Millisecond).Seconds()
-	return nil
+func (self *FDUsage) Get() error {
+	return ErrNotImplemented{runtime.GOOS}
 }
 
-type memorystatusex struct {
-	Length               uint32
-	MemoryLoad           uint32
-	TotalPhys            uint64
-	AvailPhys            uint64
-	TotalPageFile        uint64
-	AvailPageFile        uint64
-	TotalVirtual         uint64
-	AvailVirtual         uint64
-	AvailExtendedVirtual uint64
+func (self *ProcEnv) Get(pid int) error {
+	return ErrNotImplemented{runtime.GOOS}
 }
 
-func (m *Mem) Get() error {
-	var x memorystatusex
-	x.Length = uint32(unsafe.Sizeof(x))
-	r1, _, e1 := syscall.Syscall(procGlobalMemoryStatusEx.Addr(), 1,
-		uintptr(unsafe.Pointer(&x)),
-		0,
-		0,
-	)
-	if err := checkErrno(r1, e1); err != nil {
-		return fmt.Errorf("GlobalMemoryStatusEx: %s", err)
-	}
-	m.Total = x.TotalPhys
-	m.Free = x.AvailPhys
-	m.ActualFree = m.Free
-	m.Used = m.Total - m.Free
-	m.ActualUsed = m.Used
-	return nil
+func (self *ProcExe) Get(pid int) error {
+	return ErrNotImplemented{runtime.GOOS}
 }
 
-func (s *Swap) Get() error {
-	const MB = 1024 * 1024
-	out, err := exec.Command("wmic", "pagefile", "list", "full").Output()
-	if err != nil {
-		return err
-	}
-	total, err := parseWmicOutput(out, []byte("AllocatedBaseSize"))
-	if err != nil {
-		return err
-	}
-	used, err := parseWmicOutput(out, []byte("CurrentUsage"))
-	if err != nil {
-		return err
-	}
-	s.Total = total * MB
-	s.Used = used * MB
-	s.Free = s.Total - s.Used
-	return nil
+func (self *ProcFDUsage) Get(pid int) error {
+	return ErrNotImplemented{runtime.GOOS}
 }
 
-func parseWmicOutput(s, sep []byte) (uint64, error) {
-	bb := bytes.Split(s, []byte("\n"))
-	for i := 0; i < len(bb); i++ {
-		b := bytes.TrimSpace(bb[i])
-		n := bytes.IndexByte(b, '=')
-		if n > 0 && bytes.Equal(sep, b[:n]) {
-			return strconv.ParseUint(string(b[n+1:]), 10, 64)
+func (self *Uptime) Get() error {
+	// Minimum supported OS is Windows Vista.
+	if !version.IsWindowsVistaOrGreater() {
+		return ErrNotImplemented{runtime.GOOS}
+	}
+
+	bootTimeLock.Lock()
+	defer bootTimeLock.Unlock()
+	if bootTime == nil {
+		os, err := getWin32OperatingSystem()
+		if err != nil {
+			return errors.Wrap(err, "failed to get boot time using WMI")
 		}
+		bootTime = &os.LastBootUpTime
 	}
-	return 0, errors.New("parseWmicOutput: missing field: " + string(sep))
+
+	self.Length = time.Since(*bootTime).Seconds()
+	return nil
 }
 
-func (c *Cpu) Get() error {
-	var (
-		idleTime   syscall.Filetime
-		kernelTime syscall.Filetime // Includes kernel and idle time.
-		userTime   syscall.Filetime
-	)
-	r1, _, e1 := syscall.Syscall(procGetSystemTimes.Addr(), 3,
-		uintptr(unsafe.Pointer(&idleTime)),
-		uintptr(unsafe.Pointer(&kernelTime)),
-		uintptr(unsafe.Pointer(&userTime)),
-	)
-	if err := checkErrno(r1, e1); err != nil {
-		return fmt.Errorf("GetSystemTimes: %s", err)
+func (self *Mem) Get() error {
+	memoryStatusEx, err := windows.GlobalMemoryStatusEx()
+	if err != nil {
+		return errors.Wrap(err, "GlobalMemoryStatusEx failed")
 	}
 
-	c.Idle = uint64(idleTime.Nanoseconds())
-	c.Sys = uint64(kernelTime.Nanoseconds()) - c.Idle
-	c.User = uint64(userTime.Nanoseconds())
+	self.Total = memoryStatusEx.TotalPhys
+	self.Free = memoryStatusEx.AvailPhys
+	self.Used = self.Total - self.Free
+	self.ActualFree = self.Free
+	self.ActualUsed = self.Used
+	return nil
+}
+
+func (self *Swap) Get() error {
+	memoryStatusEx, err := windows.GlobalMemoryStatusEx()
+	if err != nil {
+		return errors.Wrap(err, "GlobalMemoryStatusEx failed")
+	}
+
+	self.Total = memoryStatusEx.TotalPageFile
+	self.Free = memoryStatusEx.AvailPageFile
+	self.Used = self.Total - self.Free
+	return nil
+}
+
+func (self *HugeTLBPages) Get() error {
+	return ErrNotImplemented{runtime.GOOS}
+}
+
+func (self *Cpu) Get() error {
+	idle, kernel, user, err := windows.GetSystemTimes()
+	if err != nil {
+		return errors.Wrap(err, "GetSystemTimes failed")
+	}
+
+	// CPU times are reported in milliseconds by gosigar.
+	self.Idle = uint64(idle / time.Millisecond)
+	self.Sys = uint64(kernel / time.Millisecond)
+	self.User = uint64(user / time.Millisecond)
 	return nil
 }
 
 func (self *CpuList) Get() error {
-	return ErrNotImplemented
+	cpus, err := windows.NtQuerySystemProcessorPerformanceInformation()
+	if err != nil {
+		return errors.Wrap(err, "NtQuerySystemProcessorPerformanceInformation failed")
+	}
+
+	self.List = make([]Cpu, 0, len(cpus))
+	for _, cpu := range cpus {
+		self.List = append(self.List, Cpu{
+			Idle: uint64(cpu.IdleTime / time.Millisecond),
+			Sys:  uint64(cpu.KernelTime / time.Millisecond),
+			User: uint64(cpu.UserTime / time.Millisecond),
+		})
+	}
+	return nil
 }
 
 func (self *FileSystemList) Get() error {
-	return ErrNotImplemented
+	drives, err := windows.GetAccessPaths()
+	if err != nil {
+		return errors.Wrap(err, "GetAccessPaths failed")
+	}
+
+	for _, drive := range drives {
+		dt, err := windows.GetDriveType(drive)
+		if err != nil {
+			return errors.Wrapf(err, "GetDriveType failed")
+		}
+
+		self.List = append(self.List, FileSystem{
+			DirName:  drive,
+			DevName:  drive,
+			TypeName: dt.String(),
+		})
+	}
+	return nil
 }
 
+// Get retrieves a list of all process identifiers (PIDs) in the system.
 func (self *ProcList) Get() error {
-	return ErrNotImplemented
+	pids, err := windows.EnumProcesses()
+	if err != nil {
+		return errors.Wrap(err, "EnumProcesses failed")
+	}
+
+	// Convert uint32 PIDs to int.
+	self.List = make([]int, 0, len(pids))
+	for _, pid := range pids {
+		self.List = append(self.List, int(pid))
+	}
+	return nil
 }
 
 func (self *ProcState) Get(pid int) error {
-	return ErrNotImplemented
+	var errs []error
+
+	var err error
+	self.Name, err = getProcName(pid)
+	if err != nil {
+		errs = append(errs, errors.Wrap(err, "getProcName failed"))
+	}
+
+	self.State, err = getProcStatus(pid)
+	if err != nil {
+		errs = append(errs, errors.Wrap(err, "getProcStatus failed"))
+	}
+
+	self.Ppid, err = getParentPid(pid)
+	if err != nil {
+		errs = append(errs, errors.Wrap(err, "getParentPid failed"))
+	}
+
+	self.Username, err = getProcCredName(pid)
+	if err != nil {
+		errs = append(errs, errors.Wrap(err, "getProcCredName failed"))
+	}
+
+	if len(errs) > 0 {
+		errStrs := make([]string, 0, len(errs))
+		for _, e := range errs {
+			errStrs = append(errStrs, e.Error())
+		}
+		return errors.New(strings.Join(errStrs, "; "))
+	}
+	return nil
+}
+
+// getProcName returns the process name associated with the PID.
+func getProcName(pid int) (string, error) {
+	handle, err := syscall.OpenProcess(processQueryLimitedInfoAccess, false, uint32(pid))
+	if err != nil {
+		return "", errors.Wrapf(err, "OpenProcess failed for pid=%v", pid)
+	}
+	defer syscall.CloseHandle(handle)
+
+	filename, err := windows.GetProcessImageFileName(handle)
+	if err != nil {
+		return "", errors.Wrapf(err, "GetProcessImageFileName failed for pid=%v", pid)
+	}
+
+	return filepath.Base(filename), nil
+}
+
+// getProcStatus returns the status of a process.
+func getProcStatus(pid int) (RunState, error) {
+	handle, err := syscall.OpenProcess(processQueryLimitedInfoAccess, false, uint32(pid))
+	if err != nil {
+		return RunStateUnknown, errors.Wrapf(err, "OpenProcess failed for pid=%v", pid)
+	}
+	defer syscall.CloseHandle(handle)
+
+	var exitCode uint32
+	err = syscall.GetExitCodeProcess(handle, &exitCode)
+	if err != nil {
+		return RunStateUnknown, errors.Wrapf(err, "GetExitCodeProcess failed for pid=%v")
+	}
+
+	if exitCode == 259 { //still active
+		return RunStateRun, nil
+	}
+	return RunStateSleep, nil
+}
+
+// getParentPid returns the parent process ID of a process.
+func getParentPid(pid int) (int, error) {
+	handle, err := syscall.OpenProcess(processQueryLimitedInfoAccess, false, uint32(pid))
+	if err != nil {
+		return RunStateUnknown, errors.Wrapf(err, "OpenProcess failed for pid=%v", pid)
+	}
+	defer syscall.CloseHandle(handle)
+
+	procInfo, err := windows.NtQueryProcessBasicInformation(handle)
+	if err != nil {
+		return 0, errors.Wrapf(err, "NtQueryProcessBasicInformation failed for pid=%v", pid)
+	}
+
+	return int(procInfo.InheritedFromUniqueProcessID), nil
+}
+
+func getProcCredName(pid int) (string, error) {
+	handle, err := syscall.OpenProcess(syscall.PROCESS_QUERY_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return "", errors.Wrapf(err, "OpenProcess failed for pid=%v", pid)
+	}
+	defer syscall.CloseHandle(handle)
+
+	// Find process token via win32.
+	var token syscall.Token
+	err = syscall.OpenProcessToken(handle, syscall.TOKEN_QUERY, &token)
+	if err != nil {
+		return "", errors.Wrapf(err, "OpenProcessToken failed for pid=%v", pid)
+	}
+
+	// Find the token user.
+	tokenUser, err := token.GetTokenUser()
+	if err != nil {
+		return "", errors.Wrapf(err, "GetTokenInformation failed for pid=%v", pid)
+	}
+
+	// Close token to prevent handle leaks.
+	err = token.Close()
+	if err != nil {
+		return "", errors.Wrapf(err, "failed while closing process token handle for pid=%v", pid)
+	}
+
+	// Look up domain account by SID.
+	account, domain, _, err := tokenUser.User.Sid.LookupAccount("")
+	if err != nil {
+		sid, sidErr := tokenUser.User.Sid.String()
+		if sidErr != nil {
+			return "", errors.Wrapf(err, "failed while looking up account name for pid=%v", pid)
+		}
+		return "", errors.Wrapf(err, "failed while looking up account name for SID=%v of pid=%v", sid, pid)
+	}
+
+	return fmt.Sprintf(`%s\%s`, domain, account), nil
 }
 
 func (self *ProcMem) Get(pid int) error {
@@ -158,83 +333,111 @@ func (self *ProcMem) Get(pid int) error {
 }
 
 func (self *ProcTime) Get(pid int) error {
-	handle, err := syscall.OpenProcess(processQueryLimitedInfoAccess, false, uint32(pid))
+	cpu, err := getProcTimes(pid)
 	if err != nil {
-		return errors.Wrapf(err, "OpenProcess failed for pid=%v", pid)
-	}
-	defer syscall.CloseHandle(handle)
-
-	var CPU syscall.Rusage
-	if err := syscall.GetProcessTimes(handle, &CPU.CreationTime, &CPU.ExitTime, &CPU.KernelTime, &CPU.UserTime); err != nil {
-		return errors.Wrapf(err, "GetProcessTimes failed for pid=%v", pid)
+		return err
 	}
 
 	// Windows epoch times are expressed as time elapsed since midnight on
 	// January 1, 1601 at Greenwich, England. This converts the Filetime to
 	// unix epoch in milliseconds.
-	self.StartTime = uint64(CPU.CreationTime.Nanoseconds() / 1e6)
+	self.StartTime = uint64(cpu.CreationTime.Nanoseconds() / 1e6)
 
 	// Convert to millis.
-	self.User = uint64(windows.FiletimeToDuration(&CPU.UserTime).Nanoseconds() / 1e6)
-	self.Sys = uint64(windows.FiletimeToDuration(&CPU.KernelTime).Nanoseconds() / 1e6)
+	self.User = uint64(windows.FiletimeToDuration(&cpu.UserTime).Nanoseconds() / 1e6)
+	self.Sys = uint64(windows.FiletimeToDuration(&cpu.KernelTime).Nanoseconds() / 1e6)
 	self.Total = self.User + self.Sys
 
 	return nil
 }
 
-func (self *ProcArgs) Get(pid int) error {
-	return ErrNotImplemented
-}
-
-func (self *ProcExe) Get(pid int) error {
-	return ErrNotImplemented
-}
-
-func (fs *FileSystemUsage) Get(path string) error {
-	root, err := syscall.UTF16PtrFromString(path)
+func getProcTimes(pid int) (*syscall.Rusage, error) {
+	handle, err := syscall.OpenProcess(processQueryLimitedInfoAccess, false, uint32(pid))
 	if err != nil {
-		return fmt.Errorf("FileSystemUsage (%s): %s", path, err)
+		return nil, errors.Wrapf(err, "OpenProcess failed for pid=%v", pid)
+	}
+	defer syscall.CloseHandle(handle)
+
+	var cpu syscall.Rusage
+	if err := syscall.GetProcessTimes(handle, &cpu.CreationTime, &cpu.ExitTime, &cpu.KernelTime, &cpu.UserTime); err != nil {
+		return nil, errors.Wrapf(err, "GetProcessTimes failed for pid=%v", pid)
 	}
 
-	var (
-		SectorsPerCluster uint32
-		BytesPerSector    uint32
+	return &cpu, nil
+}
 
-		// Free clusters available to the user
-		// associated with the calling thread.
-		NumberOfFreeClusters uint32
-
-		// Total clusters available to the user
-		// associated with the calling thread.
-		TotalNumberOfClusters uint32
-	)
-	r1, _, e1 := syscall.Syscall6(procGetDiskFreeSpace.Addr(), 5,
-		uintptr(unsafe.Pointer(root)),
-		uintptr(unsafe.Pointer(&SectorsPerCluster)),
-		uintptr(unsafe.Pointer(&BytesPerSector)),
-		uintptr(unsafe.Pointer(&NumberOfFreeClusters)),
-		uintptr(unsafe.Pointer(&TotalNumberOfClusters)),
-		0,
-	)
-	if err := checkErrno(r1, e1); err != nil {
-		return fmt.Errorf("FileSystemUsage (%s): %s", path, err)
+func (self *ProcArgs) Get(pid int) error {
+	// The minimum supported client for Win32_Process is Windows Vista.
+	if !version.IsWindowsVistaOrGreater() {
+		return ErrNotImplemented{runtime.GOOS}
 	}
 
-	m := uint64(SectorsPerCluster * BytesPerSector / 1024)
-	fs.Total = uint64(TotalNumberOfClusters) * m
-	fs.Free = uint64(NumberOfFreeClusters) * m
-	fs.Avail = fs.Free
-	fs.Used = fs.Total - fs.Free
+	process, err := getWin32Process(int32(pid))
+	if err != nil {
+		return errors.Wrapf(err, "ProcArgs failed for pid=%v", pid)
+	}
+	if process.CommandLine != nil {
+		self.List = []string{*process.CommandLine}
+	}
 
 	return nil
 }
 
-func checkErrno(r1 uintptr, e1 error) error {
-	if r1 == 0 {
-		if e, ok := e1.(syscall.Errno); ok && e != 0 {
-			return e1
-		}
-		return syscall.EINVAL
+func (self *FileSystemUsage) Get(path string) error {
+	freeBytesAvailable, totalNumberOfBytes, totalNumberOfFreeBytes, err := windows.GetDiskFreeSpaceEx(path)
+	if err != nil {
+		return errors.Wrap(err, "GetDiskFreeSpaceEx failed")
 	}
+
+	self.Total = totalNumberOfBytes
+	self.Free = totalNumberOfFreeBytes
+	self.Used = self.Total - self.Free
+	self.Avail = freeBytesAvailable
+	return nil
+}
+
+// getWin32Process gets information about the process with the given process ID.
+// It uses a WMI query to get the information from the local system.
+func getWin32Process(pid int32) (Win32_Process, error) {
+	var dst []Win32_Process
+	query := fmt.Sprintf("WHERE ProcessId = %d", pid)
+	q := wmi.CreateQuery(&dst, query)
+	err := wmi.Query(q, &dst)
+	if err != nil {
+		return Win32_Process{}, fmt.Errorf("could not get Win32_Process %s: %v", query, err)
+	}
+	if len(dst) < 1 {
+		return Win32_Process{}, fmt.Errorf("could not get Win32_Process %s: Process not found", query)
+	}
+	return dst[0], nil
+}
+
+func getWin32OperatingSystem() (Win32_OperatingSystem, error) {
+	var dst []Win32_OperatingSystem
+	q := wmi.CreateQuery(&dst, "")
+	err := wmi.Query(q, &dst)
+	if err != nil {
+		return Win32_OperatingSystem{}, errors.Wrap(err, "wmi query for Win32_OperatingSystem failed")
+	}
+	if len(dst) != 1 {
+		return Win32_OperatingSystem{}, errors.New("wmi query for Win32_OperatingSystem failed")
+	}
+	return dst[0], nil
+}
+
+func (self *Rusage) Get(who int) error {
+	if who != 0 {
+		return ErrNotImplemented{runtime.GOOS}
+	}
+
+	pid := os.Getpid()
+	cpu, err := getProcTimes(pid)
+	if err != nil {
+		return err
+	}
+
+	self.Utime = windows.FiletimeToDuration(&cpu.UserTime)
+	self.Stime = windows.FiletimeToDuration(&cpu.KernelTime)
+
 	return nil
 }

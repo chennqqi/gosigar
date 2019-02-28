@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"os"
 	"syscall"
+
+	"github.com/elastic/gosigar/sys"
 )
 
 const (
@@ -28,7 +30,7 @@ const (
 )
 
 var (
-	byteOrder = binary.LittleEndian
+	byteOrder = sys.GetEndian()
 )
 
 // linux/connector.h: struct cb_id

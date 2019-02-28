@@ -1,4 +1,6 @@
-package sigar
+// Copyright (c) 2012 VMware, Inc.
+
+package gosigar
 
 import (
 	"unsafe"
