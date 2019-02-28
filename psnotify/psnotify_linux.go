@@ -248,13 +248,21 @@ func (w *Watcher) handleEvent(data []byte) {
 			w.RemoveWatch(pid)
 			w.Exit <- &ProcEventExit{Pid: pid}
 		}
-	case PROC_EVENT_UID, PROC_EVENT_GID:
+	case PROC_EVENT_UID:
 		event := &idProcEvent{}
 		binary.Read(buf, byteOrder, event)
 		pid := int(event.ProcessPid)
 		if w.isWatching(pid, PROC_EVENT_UID) {
 			w.RemoveWatch(pid)
-			w.Uid <- &ProcEventUid{Pid: pid, Tgid: event.ProcessTgid, Rid: event.Rid, Eid: event.Eid}
+			w.Uid <- &ProcEventUid{Pid: pid, Tgid: int(event.ProcessTgid), Rid: int(event.Rid), Eid: int(event.Eid)}
+		}
+	case PROC_EVENT_GID:
+		event := &idProcEvent{}
+		binary.Read(buf, byteOrder, event)
+		pid := int(event.ProcessPid)
+		if w.isWatching(pid, PROC_EVENT_UID) {
+			w.RemoveWatch(pid)
+			w.Uid <- &ProcEventUid{IsGid: true, Pid: pid, Tgid: int(event.ProcessTgid), Rid: int(event.Rid), Eid: int(event.Eid)}
 		}
 	case PROC_EVENT_SID:
 		event := &sidProcEvent{}
@@ -262,7 +270,7 @@ func (w *Watcher) handleEvent(data []byte) {
 		pid := int(event.ProcessPid)
 		if w.isWatching(pid, PROC_EVENT_SID) {
 			w.RemoveWatch(pid)
-			w.Sid <- &ProcEventSid{Pid: pid, Tgid: event.ProcessTgid}
+			w.Sid <- &ProcEventSid{Pid: pid, Tgid: int(event.ProcessTgid)}
 		}
 	}
 }

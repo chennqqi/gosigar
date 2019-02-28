@@ -25,14 +25,15 @@ type ProcEventExit struct {
 
 type ProcEventSid struct {
 	Pid  int
-	Tgid uint32
+	Tgid int
 }
 
 type ProcEventUid struct {
+	IsGid bool
 	Pid  int // Pid of the process that called exit()
-	Tgid uint32
-	Rid  uint32 //rid or rgid
-	Eid  uint32 //egit or euid
+	Tgid int
+	Rid  int //rid or rgid
+	Eid  int //egit or euid
 }
 
 type watch struct {
