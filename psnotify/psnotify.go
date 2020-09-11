@@ -93,6 +93,8 @@ func (w *Watcher) finish() {
 	close(w.Exec)
 	close(w.Exit)
 	close(w.Error)
+	close(w.Sid)
+	close(w.Uid)
 }
 
 // Closes the OS specific event listener,
