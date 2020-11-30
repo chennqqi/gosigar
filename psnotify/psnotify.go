@@ -26,10 +26,10 @@ type ProcEventSid struct {
 
 type ProcEventUid struct {
 	IsGid bool
-	Pid  int // Pid of the process that called exit()
-	Tgid int
-	Rid  int //rid or rgid
-	Eid  int //egit or euid
+	Pid   int // Pid of the process that called exit()
+	Tgid  int
+	Rid   int //rid or rgid
+	Eid   int //egit or euid
 }
 
 type watch struct {
@@ -53,6 +53,7 @@ type Watcher struct {
 	Uid   chan *ProcEventUid  // Exit events are sent on this channel
 	done  chan bool           // Used to stop the readEvents() goroutine
 
+	breakLoop   chan struct{}
 	isClosed    bool // Set to true when Close() is first called
 	closedMutex *sync.Mutex
 }
@@ -76,6 +77,7 @@ func NewWatcher() (*Watcher, error) {
 		Uid:          make(chan *ProcEventUid),
 		Error:        make(chan error),
 		done:         make(chan bool, 1),
+		breakLoop:    make(chan struct{}),
 		closedMutex:  &sync.Mutex{},
 	}
 
@@ -111,10 +113,12 @@ func (w *Watcher) Close() error {
 	}
 	w.watchesMutex.Unlock()
 
+	// notify done signal to readEvents loop routine
 	w.done <- true
 
+	// wait listener readEvents loop break
+	<-w.breakLoop
 	w.listener.close()
-
 	return nil
 }
 
