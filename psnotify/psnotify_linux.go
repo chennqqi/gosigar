@@ -181,7 +181,7 @@ func (w *Watcher) readEvents() {
 			}
 		}
 	}
-	close(w.breakDone)
+	close(w.breakLoop)
 }
 
 // Internal helper to check if pid && event is being watched
