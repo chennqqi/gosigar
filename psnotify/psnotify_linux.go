@@ -159,7 +159,7 @@ func (w *Watcher) readEvents() {
 
 	for {
 		if w.isDone() {
-			return
+			break
 		}
 
 		nr, _, err := syscall.Recvfrom(listener.sock, buf, 0)
